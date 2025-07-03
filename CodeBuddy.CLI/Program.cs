@@ -520,7 +520,7 @@ public class VectorStore
     }
 
     // Поиск в хранилище
-    public async Task<string> SearchAsync(string query, int topK = 3)
+    public async Task<string> SearchAsync(string query, int topK = 1000)
     {
         var queryEmbedding = await GetEmbeddingsAsync(query);
         var results = new List<VectorRecord>();
