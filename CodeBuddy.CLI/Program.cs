@@ -447,7 +447,7 @@ public class CodeBuddy
             3. Если не уверен, предложи где искать в кодовой базе
             """;
 
-        Console.WriteLine("==============================\n" + prompt + "\n==============================\n");
+        //Console.WriteLine("==============================\n" + prompt + "\n==============================\n");
 
         var request = new ChatRequest
         {
