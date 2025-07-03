@@ -12,7 +12,7 @@ using System.Text;
 public class CodeBuddy
 {
     private static OllamaApiClient _ollama;
-    private static string _modelName = "llama3.1:latest";
+    private static string _modelName = "qwen3:8b";
     private static string _embeddingModel = "nomic-embed-text:latest";
     private static VectorStore _vectorStore;
 
