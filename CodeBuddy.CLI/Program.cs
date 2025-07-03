@@ -454,7 +454,7 @@ public class CodeBuddy
             Model = _modelName,
             Messages =
             [
-                new(ChatRole.System, "Ta CodeBuddy, AI-ассистент для .NET разработчиков. Отвечайте на вопросы о кодовой базе, используя предоставленный контекст."),
+                new(ChatRole.System, "Tы CodeBuddy, AI-ассистент для .NET разработчиков. Отвечайте на вопросы о кодовой базе, используя предоставленный контекст."),
                 new(ChatRole.User, prompt)
             ],
             Stream = false
