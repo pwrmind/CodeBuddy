@@ -464,7 +464,7 @@ public class CodeBuddy
 
         await foreach (var r in _ollama.ChatAsync(request, CancellationToken.None))
         {
-            Console.Write(responce.AppendLine(r.Message.Content));
+            responce.AppendLine(r.Message.Content);
         }
 
         return responce.ToString();
