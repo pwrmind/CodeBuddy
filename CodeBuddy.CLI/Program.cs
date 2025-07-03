@@ -22,8 +22,8 @@ public class CodeBuddy
         Console.OutputEncoding = Encoding.UTF8;
 
         Console.Title = "👾 CodeBuddy - AI Помощник Программиста";
-        Console.WriteLine("=== CodeBuddy v1.0 - Ваш Ассистент по Кодовой Базе ===");
-        Console.WriteLine("Использует OmniSharp для анализа кода и Ollama для RAG\n");
+        Console.WriteLine("=== 👾 CodeBuddy v1.0 - Ваш Ассистент по Кодовой Базе ===");
+        Console.WriteLine("Использует CSharpSyntaxWalker 🚶‍ для анализа кода и Ollama 🦙 для RAG\n");
 
         // Инициализация Ollama
         try
@@ -45,12 +45,12 @@ public class CodeBuddy
         }
 
         // Загрузка проекта
-        Console.WriteLine("\nВведите путь к решению или каталогу проекта:");
+        Console.WriteLine("\n🗂 Введите путь к решению или каталогу проекта:");
         var path = Console.ReadLine()?.Trim('"');
 
         if (!Directory.Exists(path))
         {
-            Console.WriteLine("Каталог не найден.");
+            Console.WriteLine("⚠️ Каталог не найден.");
             return;
         }
 
@@ -171,6 +171,40 @@ public class CodeBuddy
             ));
         }
 
+        // Добавить структуры
+        var structs = new SourceCodeQuery<StructDeclarationSyntax>(provider).ToList();
+        foreach (var structDecl in structs)
+        {
+            fragments.Add(new CodeFragment(
+                Id: Guid.NewGuid().ToString(),
+                Content: FormatStructInfo(structDecl),
+                Description: $"Структура: {structDecl.Identifier}"
+            ));
+        }
+
+        // Добавляем перечисления
+        var enums = new SourceCodeQuery<EnumDeclarationSyntax>(provider).ToList();
+        foreach (var enumDecl in enums)
+        {
+            fragments.Add(new CodeFragment(
+                Id: Guid.NewGuid().ToString(),
+                Content: FormatEnumInfo(enumDecl),
+                Description: $"Перечисление: {enumDecl.Identifier}"
+            ));
+        }
+
+        // Добавляем свойства
+        var properties = new SourceCodeQuery<PropertyDeclarationSyntax>(provider).ToList();
+        foreach (var prop in properties)
+        {
+            fragments.Add(new CodeFragment(
+                Id: Guid.NewGuid().ToString(),
+                Content: FormatPropertyInfo(prop),
+                Description: $"Свойство: {prop.Identifier} в {GetParentName(prop)}"
+            ));
+        }
+
+
         return fragments;
     }
 
@@ -180,13 +214,26 @@ public class CodeBuddy
         sb.AppendLine($"КЛАСС: {classDecl.Identifier}");
         sb.AppendLine($"Модификаторы: {string.Join(" ", classDecl.Modifiers)}");
 
+        // Детализировать базовые типы
         if (classDecl.BaseList != null)
-            sb.AppendLine($"Базовые типы: {string.Join(", ", classDecl.BaseList.Types)}");
+        {
+            sb.AppendLine("Базовые типы:");
+            foreach (var type in classDecl.BaseList.Types)
+            {
+                sb.AppendLine($"- {type.Type}");
+                if (type.Type is GenericNameSyntax generic)
+                {
+                    sb.AppendLine($"  Параметры: {string.Join(", ", generic.TypeArgumentList.Arguments)}");
+                }
+            }
+        }
 
         sb.AppendLine("\nЧлены класса:");
         foreach (var member in classDecl.Members)
         {
-            if (member is PropertyDeclarationSyntax prop)
+            if (member is MethodDeclarationSyntax method)
+                sb.AppendLine($"- Метод: {method.ReturnType} {method.Identifier}");
+            else if (member is PropertyDeclarationSyntax prop)
                 sb.AppendLine($"- Свойство: {prop.Type} {prop.Identifier}");
             else if (member is FieldDeclarationSyntax field)
                 sb.AppendLine($"- Поле: {field.Declaration.Variables.First().Identifier}");
@@ -198,6 +245,108 @@ public class CodeBuddy
         return sb.ToString();
     }
 
+    private static string FormatEnumInfo(EnumDeclarationSyntax enumDecl)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"ПЕРЕЧИСЛЕНИЕ: {enumDecl.Identifier}");
+        sb.AppendLine($"Модификаторы: {string.Join(" ", enumDecl.Modifiers)}");
+
+        if (enumDecl.BaseList != null)
+            sb.AppendLine($"Базовый тип: {enumDecl.BaseList.Types.FirstOrDefault()?.Type}");
+
+        sb.AppendLine("\nЗначения:");
+        foreach (var member in enumDecl.Members)
+        {
+            sb.Append($"- {member.Identifier}");
+            if (member.EqualsValue != null)
+                sb.Append($" = {member.EqualsValue.Value}");
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("\nДокументация:");
+        sb.AppendLine(GetDocumentationComment(enumDecl));
+
+        return sb.ToString();
+    }
+
+    private static string FormatPropertyInfo(PropertyDeclarationSyntax prop)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"СВОЙСТВО: {prop.Identifier}");
+        sb.AppendLine($"Тип: {prop.Type}");
+        sb.AppendLine($"Модификаторы: {string.Join(" ", prop.Modifiers)}");
+        sb.AppendLine($"Принадлежит: {GetParentName(prop)}");
+
+        sb.AppendLine("\nАкцессоры:");
+        if (prop.AccessorList != null)
+        {
+            foreach (var accessor in prop.AccessorList.Accessors)
+            {
+                sb.AppendLine($"- {accessor.Keyword}: {accessor.Modifiers}");
+            }
+        }
+        else if (prop.ExpressionBody != null)
+        {
+            sb.AppendLine("- Expression body");
+        }
+
+        sb.AppendLine("\nДокументация:");
+        sb.AppendLine(GetDocumentationComment(prop));
+
+        return sb.ToString();
+    }
+
+    // Вспомогательный метод для получения имени родителя
+    private static string GetParentName(SyntaxNode node)
+    {
+        return node.Parent switch
+        {
+            ClassDeclarationSyntax cls => $"классу {cls.Identifier}",
+            StructDeclarationSyntax str => $"структуре {str.Identifier}",
+            InterfaceDeclarationSyntax iface => $"интерфейсу {iface.Identifier}",
+            RecordDeclarationSyntax rec => $"записи {rec.Identifier}",
+            _ => "глобальной области"
+        };
+    }
+
+    // Пример метода для форматирования структуры
+    private static string FormatStructInfo(StructDeclarationSyntax structDecl)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"СТРУКТУРА: {structDecl.Identifier}");
+        sb.AppendLine($"Модификаторы: {string.Join(" ", structDecl.Modifiers)}");
+
+        // Детализировать базовые типы
+        if (structDecl.BaseList != null)
+        {
+            sb.AppendLine("Базовые типы:");
+            foreach (var type in structDecl.BaseList.Types)
+            {
+                sb.AppendLine($"- {type.Type}");
+                if (type.Type is GenericNameSyntax generic)
+                {
+                    sb.AppendLine($"  Параметры: {string.Join(", ", generic.TypeArgumentList.Arguments)}");
+                }
+            }
+        }
+
+        sb.AppendLine("\nЧлены структуры:");
+        foreach (var member in structDecl.Members)
+        {
+            if (member is MethodDeclarationSyntax method)
+                sb.AppendLine($"- Метод: {method.ReturnType} {method.Identifier}");
+            else if (member is PropertyDeclarationSyntax prop)
+                sb.AppendLine($"- Свойство: {prop.Type} {prop.Identifier}");
+            else if (member is FieldDeclarationSyntax field)
+                sb.AppendLine($"- Поле: {field.Declaration.Variables.First().Identifier}");
+        }
+
+        sb.AppendLine("\nДокументация:");
+        sb.AppendLine(GetDocumentationComment(structDecl));
+
+        return sb.ToString();
+    }
+
     private static string FormatMethodInfo(MethodDeclarationSyntax method)
     {
         var sb = new StringBuilder();
@@ -205,7 +354,7 @@ public class CodeBuddy
         sb.AppendLine($"Возвращаемый тип: {method.ReturnType}");
         sb.AppendLine($"Параметры: {string.Join(", ", method.ParameterList.Parameters)}");
         sb.AppendLine($"Модификаторы: {string.Join(" ", method.Modifiers)}");
-
+        sb.AppendLine($"Принадлежит: {GetParentName(method)}");
         sb.AppendLine("\nДокументация:");
         sb.AppendLine(GetDocumentationComment(method));
 
@@ -231,6 +380,8 @@ public class CodeBuddy
                 sb.AppendLine($"- Метод: {method.ReturnType} {method.Identifier}");
             else if (member is PropertyDeclarationSyntax prop)
                 sb.AppendLine($"- Свойство: {prop.Type} {prop.Identifier}");
+            else if (member is FieldDeclarationSyntax field)
+                sb.AppendLine($"- Поле: {field.Declaration.Variables.First().Identifier}");
         }
 
         sb.AppendLine("\nДокументация:");
@@ -271,7 +422,14 @@ public class CodeBuddy
                         t.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia))
             .Select(t => t.ToFullString().Trim());
 
-        return string.Join("\n", docComments) ?? "Нет документации";
+        // Добавить обычные комментарии
+        var regularComments = trivia
+            .Where(t => t.IsKind(SyntaxKind.SingleLineCommentTrivia) ||
+                        t.IsKind(SyntaxKind.MultiLineCommentTrivia))
+            .Select(t => t.ToFullString().Trim());
+
+        return string.Join("\n", docComments.Concat(regularComments)).Trim()
+               ?? "Нет документации";
     }
 
     private static async Task<string> GenerateAnswerAsync(string question, string context)
@@ -285,16 +443,18 @@ public class CodeBuddy
             
             [ИНСТРУКЦИИ]
             1. Отвечайте ТОЛЬКО на основе контекста
-            2. Будьте технически точны и кратки
-            3. Если не уверены, предложите где искать в кодовой базе
+            2. Будь технически точен и краток
+            3. Если не уверен, предложи где искать в кодовой базе
             """;
+
+        Console.WriteLine("==============================\n" + prompt + "\n==============================\n");
 
         var request = new ChatRequest
         {
             Model = _modelName,
             Messages =
             [
-                new(ChatRole.System, "Вы CodeBuddy, AI-ассистент для .NET разработчиков. Отвечайте на вопросы о кодовой базе, используя предоставленный контекст."),
+                new(ChatRole.System, "Ta CodeBuddy, AI-ассистент для .NET разработчиков. Отвечайте на вопросы о кодовой базе, используя предоставленный контекст."),
                 new(ChatRole.User, prompt)
             ],
             Stream = false
@@ -330,17 +490,33 @@ public class VectorStore
     // Построение хранилища
     public async Task BuildStoreAsync(List<CodeFragment> fragments)
     {
-        var tasks = fragments.Select(async fragment =>
+        // Группировка для пакетной обработки
+        var batchSize = 10;
+        for (int i = 0; i < fragments.Count; i += batchSize)
         {
-            var embeddings = await GetEmbeddingsAsync(fragment.Content);
+            var batch = fragments.Skip(i).Take(batchSize).ToList();
+            var embeddings = await GetBatchEmbeddingsAsync(batch.Select(f => f.Content).ToList());
 
-            foreach (var embedding in embeddings)
+            for (int j = 0; j < batch.Count; j++)
             {
-                _vectors.Add(new VectorRecord(fragment.Id, fragment.Content, fragment.Description, embedding));
+                _vectors.Add(new VectorRecord(
+                    batch[j].Id,
+                    batch[j].Content,
+                    batch[j].Description,
+                    embeddings[j]
+                ));
             }
-        });
+        }
+    }
 
-        await Task.WhenAll(tasks);
+    private async Task<List<float[]>> GetBatchEmbeddingsAsync(List<string> texts)
+    {
+        var response = await _ollama.EmbedAsync(new EmbedRequest
+        {
+            Model = _embeddingModel,
+            Input = texts
+        });
+        return response.Embeddings;
     }
 
     // Поиск в хранилище
@@ -351,10 +527,12 @@ public class VectorStore
 
         foreach (var embedding in queryEmbedding)
         {
+            // Добавить вес по типу элемента
             foreach (var vector in _vectors)
             {
-                var similarity = CosineSimilarity(embedding, vector.Embedding);
-                results.Add(vector with { Similarity = similarity });
+                var baseSimilarity = CosineSimilarity(embedding, vector.Embedding);
+                var weightedSimilarity = baseSimilarity * GetTypeWeight(vector.Description);
+                results.Add(vector with { Similarity = weightedSimilarity });
             }
         }
 
@@ -364,6 +542,17 @@ public class VectorStore
             .ToList();
 
         return FormatSearchResults(topResults);
+    }
+
+    private float GetTypeWeight(string description)
+    {
+        return description switch
+        {
+            string s when s.Contains("Класс") => 1.2f,
+            string s when s.Contains("Метод") => 1.1f,
+            string s when s.Contains("Интерфейс") => 1.15f,
+            _ => 1.0f
+        };
     }
 
     // Получение эмбеддингов
@@ -398,14 +587,14 @@ public class VectorStore
     {
         var sb = new StringBuilder();
         sb.AppendLine("Релевантный контекст кода:");
-        sb.AppendLine("--------------------------------");
+        sb.AppendLine("---");
 
         foreach (var (i, result) in results.Select((r, i) => (i, r)))
         {
             sb.AppendLine($"🔍 Совпадение #{i + 1} (точность: {result.Similarity:0.00})");
             sb.AppendLine($"📄 {result.Description}");
             sb.AppendLine(result.Content.Trim());
-            sb.AppendLine("--------------------------------");
+            sb.AppendLine("---");
         }
 
         return sb.ToString();
@@ -443,7 +632,10 @@ public class SourceCodeQueryProvider : IQueryProvider, IDisposable
     {
         try
         {
-            var csFiles = Directory.EnumerateFiles(_solutionPath, "*.cs", SearchOption.AllDirectories);
+            var csFiles = Directory.EnumerateFiles(_solutionPath, "*.cs", SearchOption.AllDirectories)
+                .Where(f => !f.Contains("\\bin\\") && !f.Contains("\\obj\\") && !f.Contains("\\.git\\"));
+
+
             foreach (var file in csFiles)
             {
                 try
@@ -733,6 +925,18 @@ public class CustomCSharpSyntaxWalker : CSharpSyntaxWalker
         {
             _results.Add(node);
         }
+    }
+
+    public override void VisitPropertyDeclaration(PropertyDeclarationSyntax node)
+    {
+        ApplyFilters(node);
+        base.VisitPropertyDeclaration(node);
+    }
+
+    public override void VisitFieldDeclaration(FieldDeclarationSyntax node)
+    {
+        ApplyFilters(node);
+        base.VisitFieldDeclaration(node);
     }
 
     public IEnumerable<CSharpSyntaxNode> GetResults() => _results;
