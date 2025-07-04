@@ -19,7 +19,6 @@ public class CodeBuddy
     private static OllamaApiClient _ollama;
     private static string _modelName = "qwen3:8b";
     private static string _embeddingModel = "nomic-embed-text:latest";
-    private static VectorStore _vectorStore;
 
     public static async Task Main(string[] args)
     {
