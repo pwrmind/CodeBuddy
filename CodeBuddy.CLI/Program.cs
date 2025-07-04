@@ -136,14 +136,14 @@ public class CodeBuddy
                     Description: $"Метод: {method.Identifier} в {classDecl.Identifier}"
                 ));
             }
-
-            // Извлечение вызовов методов
-            Console.WriteLine("🔍 Извлечение вызовов методов...");
-            var methodCalls = ExtractMethodCalls(provider);
-            fragments.AddRange(methodCalls);
-            Console.WriteLine($"📊 Извлечено {methodCalls.Count} вызовов методов");
         }
-        
+
+        // Извлечение вызовов методов
+        Console.WriteLine("🔍 Извлечение вызовов методов...");
+        var methodCalls = ExtractMethodCalls(provider);
+        fragments.AddRange(methodCalls);
+        Console.WriteLine($"📊 Извлечено {methodCalls.Count} вызовов методов");
+
         // Извлечение интерфейсов
         var interfaces = new SourceCodeQuery<InterfaceDeclarationSyntax>(provider).ToList();
         foreach (var interfaceDecl in interfaces)
