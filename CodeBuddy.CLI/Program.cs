@@ -1,6 +1,11 @@
-﻿using Microsoft.CodeAnalysis;
+﻿#pragma warning disable SKEXP0001
+#pragma warning disable SKEXP0020
+
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.SemanticKernel.Connectors.DuckDB;
+using Microsoft.SemanticKernel.Memory;
 using OllamaSharp;
 using OllamaSharp.Models;
 using OllamaSharp.Models.Chat;
@@ -61,7 +66,13 @@ public class CodeBuddy
 
         // Построение векторного хранилища
         Console.WriteLine("🧠 Построение базы знаний...");
-        _vectorStore = new VectorStore(_ollama, _embeddingModel);
+        //_vectorStore = new VectorStore(_ollama, _embeddingModel);
+        // Инициализация
+        using var _vectorStore = new VectorStore(_ollama, _embeddingModel, "code_vectors.db");
+
+        // Построение хранилища
+        await _vectorStore.BuildStoreAsync(codeFragments);
+
         await _vectorStore.BuildStoreAsync(codeFragments);
 
         // Основной цикл взаимодействия
@@ -513,38 +524,111 @@ public class CodeBuddy
 public record CodeFragment(string Id, string Content, string Description);
 
 // Векторное хранилище
-public class VectorStore
+public class VectorStore : IDisposable
 {
     private readonly OllamaApiClient _ollama;
     private readonly string _embeddingModel;
-    private readonly ConcurrentBag<VectorRecord> _vectors = new();
+    private readonly DuckDBMemoryStore _memoryStore;
+    private const string CollectionName = "code_fragments";
+    private readonly ConcurrentDictionary<string, string> _descriptions = new();
 
-    public VectorStore(OllamaApiClient ollama, string embeddingModel)
+    public VectorStore(OllamaApiClient ollama, string embeddingModel, string dbPath = "vectors.duckdb")
     {
         _ollama = ollama;
         _embeddingModel = embeddingModel;
+
+        // Создаем DuckDBMemoryStore через статический метод
+        _memoryStore = DuckDBMemoryStore.ConnectAsync(dbPath).GetAwaiter().GetResult();
     }
 
-    // Построение хранилища
     public async Task BuildStoreAsync(List<CodeFragment> fragments)
     {
-        // Группировка для пакетной обработки
+        // Удаляем старую коллекцию (если существует)
+        if (await _memoryStore.DoesCollectionExistAsync(CollectionName))
+        {
+            await _memoryStore.DeleteCollectionAsync(CollectionName);
+        }
+
+        await _memoryStore.CreateCollectionAsync(CollectionName);
+
         var batchSize = 10;
         for (int i = 0; i < fragments.Count; i += batchSize)
         {
             var batch = fragments.Skip(i).Take(batchSize).ToList();
             var embeddings = await GetBatchEmbeddingsAsync(batch.Select(f => f.Content).ToList());
 
+            var records = new List<MemoryRecord>();
             for (int j = 0; j < batch.Count; j++)
             {
-                _vectors.Add(new VectorRecord(
-                    batch[j].Id,
-                    batch[j].Content,
-                    batch[j].Description,
-                    embeddings[j]
-                ));
+                var fragment = batch[j];
+                var embedding = new ReadOnlyMemory<float>(embeddings[j]);
+
+                // Создаем запись с метаданными
+                var record = MemoryRecord.LocalRecord(
+                    id: fragment.Id,
+                    text: fragment.Content,
+                    description: fragment.Description,
+                    embedding: embedding,
+                    additionalMetadata: null);
+
+                records.Add(record);
+                _descriptions[fragment.Id] = fragment.Description;
             }
+
+            // Пакетное добавление записей - ИСПРАВЛЕННАЯ ЧАСТЬ
+            await ProcessUpsertBatchAsync(CollectionName, records);
         }
+    }
+
+    // Метод для обработки пакетной вставки
+    private async Task ProcessUpsertBatchAsync(string collectionName, IEnumerable<MemoryRecord> records)
+    {
+        // Перебираем все элементы асинхронного потока, чтобы гарантировать выполнение операций
+        await foreach (var _ in _memoryStore.UpsertBatchAsync(collectionName, records))
+        {
+            // Просто перебираем результаты, не обрабатывая их
+        }
+    }
+
+    public async Task<string> SearchAsync(string query, int topK = 5)
+    {
+        var queryEmbedding = (await GetEmbeddingsAsync(query))[0];
+
+        // Получаем результаты с учетом весов
+        var results = new List<(MemoryRecord Record, double Score)>();
+        await foreach (var match in _memoryStore.GetNearestMatchesAsync(
+            collectionName: CollectionName,
+            embedding: new ReadOnlyMemory<float>(queryEmbedding),
+            limit: topK * 2,  // Берем больше результатов для фильтрации
+            minRelevanceScore: 0.0,
+            withEmbeddings: false))
+        {
+            results.Add(match);
+        }
+
+        // Применяем веса и сортируем
+        var weightedResults = results
+            .Select(r => (
+                Record: r.Record,
+                WeightedScore: r.Score * GetTypeWeight(_descriptions[r.Record.Metadata.Id])
+            ))
+            .OrderByDescending(r => r.WeightedScore)
+            .Take(topK)
+            .ToList();
+
+        return FormatSearchResults(weightedResults);
+    }
+
+    private float GetTypeWeight(string description)
+    {
+        return description switch
+        {
+            string s when s.Contains("Класс") => 1.2f,
+            string s when s.Contains("Метод") => 1.1f,
+            string s when s.Contains("Интерфейс") => 1.15f,
+            string s when s.Contains("Вызов") => 1.05f,
+            _ => 1.0f
+        };
     }
 
     private async Task<List<float[]>> GetBatchEmbeddingsAsync(List<string> texts)
@@ -557,44 +641,6 @@ public class VectorStore
         return response.Embeddings;
     }
 
-    // Поиск в хранилище
-    public async Task<string> SearchAsync(string query, int topK = 1000)
-    {
-        var queryEmbedding = await GetEmbeddingsAsync(query);
-        var results = new List<VectorRecord>();
-
-        foreach (var embedding in queryEmbedding)
-        {
-            // Добавить вес по типу элемента
-            foreach (var vector in _vectors)
-            {
-                var baseSimilarity = CosineSimilarity(embedding, vector.Embedding);
-                var weightedSimilarity = baseSimilarity * GetTypeWeight(vector.Description);
-                results.Add(vector with { Similarity = weightedSimilarity });
-            }
-        }
-
-        var topResults = results
-            .OrderByDescending(r => r.Similarity)
-            .Take(topK)
-            .ToList();
-
-        return FormatSearchResults(topResults);
-    }
-
-    private float GetTypeWeight(string description)
-    {
-        return description switch
-        {
-            string s when s.Contains("Класс") => 1.2f,
-            string s when s.Contains("Метод") => 1.1f,
-            string s when s.Contains("Интерфейс") => 1.15f,
-            string s when s.Contains("Вызов") => 1.05f, // Новый вес для вызовов
-            _ => 1.0f
-        };
-    }
-
-    // Получение эмбеддингов
     private async Task<List<float[]>> GetEmbeddingsAsync(string text)
     {
         var response = await _ollama.EmbedAsync(new EmbedRequest
@@ -605,38 +651,27 @@ public class VectorStore
         return response.Embeddings;
     }
 
-    // Расчет косинусного сходства
-    private float CosineSimilarity(float[] a, float[] b)
-    {
-        if (a.Length != b.Length || a.Length == 0)
-            return 0;
-
-        float dot = 0.0f, magA = 0.0f, magB = 0.0f;
-        for (int i = 0; i < a.Length; i++)
-        {
-            dot += a[i] * b[i];
-            magA += a[i] * a[i];
-            magB += b[i] * b[i];
-        }
-        return dot / (MathF.Sqrt(magA) * MathF.Sqrt(magB));
-    }
-
-    // Форматирование результатов поиска
-    private string FormatSearchResults(List<VectorRecord> results)
+    private string FormatSearchResults(List<(MemoryRecord Record, double WeightedScore)> results)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Релевантный контекст кода:");
         sb.AppendLine("---");
 
-        foreach (var (i, result) in results.Select((r, i) => (i, r)))
+        foreach (var (i, result) in results.Select((r, i) => (i + 1, r)))
         {
-            sb.AppendLine($"🔍 Совпадение #{i + 1} (точность: {result.Similarity:0.00})");
-            sb.AppendLine($"📄 {result.Description}");
-            sb.AppendLine(result.Content.Trim());
+            var record = result.Record;
+            sb.AppendLine($"🔍 Совпадение #{i} (точность: {result.WeightedScore:0.00})");
+            sb.AppendLine($"📄 {_descriptions[record.Metadata.Id]}");
+            sb.AppendLine(record.Metadata.Text.Trim());
             sb.AppendLine("---");
         }
 
         return sb.ToString();
+    }
+
+    public void Dispose()
+    {
+        _memoryStore?.Dispose();
     }
 }
 

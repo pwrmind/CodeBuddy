@@ -9,6 +9,8 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis" Version="4.14.0" />
+    <PackageReference Include="Microsoft.SemanticKernel" Version="1.59.0" />
+    <PackageReference Include="Microsoft.SemanticKernel.Connectors.DuckDB" Version="1.53.1-alpha" />
     <PackageReference Include="OllamaSharp" Version="5.2.3" />
   </ItemGroup>
 
