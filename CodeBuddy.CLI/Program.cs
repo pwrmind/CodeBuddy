@@ -136,8 +136,14 @@ public class CodeBuddy
                     Description: $"Метод: {method.Identifier} в {classDecl.Identifier}"
                 ));
             }
-        }
 
+            // Извлечение вызовов методов
+            Console.WriteLine("🔍 Извлечение вызовов методов...");
+            var methodCalls = ExtractMethodCalls(provider);
+            fragments.AddRange(methodCalls);
+            Console.WriteLine($"📊 Извлечено {methodCalls.Count} вызовов методов");
+        }
+        
         // Извлечение интерфейсов
         var interfaces = new SourceCodeQuery<InterfaceDeclarationSyntax>(provider).ToList();
         foreach (var interfaceDecl in interfaces)
@@ -206,6 +212,38 @@ public class CodeBuddy
 
 
         return fragments;
+    }
+
+    private static List<CodeFragment> ExtractMethodCalls(SourceCodeQueryProvider provider)
+    {
+        var fragments = new List<CodeFragment>();
+        var walker = new MethodCallWalker();
+
+        foreach (var tree in provider.SyntaxTrees)
+        {
+            walker.Visit(tree.GetRoot());
+        }
+
+        foreach (var call in walker.GetInvocations())
+        {
+            fragments.Add(new CodeFragment(
+                Id: Guid.NewGuid().ToString(),
+                Content: FormatMethodCallInfo(call),
+                Description: $"Вызов: {call.MethodName} в {call.Context}"
+            ));
+        }
+
+        return fragments;
+    }
+
+    private static string FormatMethodCallInfo(InvocationInfo call)
+    {
+        return $"""
+            ВЫЗОВ МЕТОДА: {call.MethodName}
+            Аргументы: ({call.Arguments})
+            Контекст: {call.Context}
+            Расположение: {call.Location}
+            """;
     }
 
     private static string FormatClassInfo(ClassDeclarationSyntax classDecl)
@@ -551,6 +589,7 @@ public class VectorStore
             string s when s.Contains("Класс") => 1.2f,
             string s when s.Contains("Метод") => 1.1f,
             string s when s.Contains("Интерфейс") => 1.15f,
+            string s when s.Contains("Вызов") => 1.05f, // Новый вес для вызовов
             _ => 1.0f
         };
     }
@@ -615,6 +654,8 @@ public class SourceCodeQueryProvider : IQueryProvider, IDisposable
 {
     private readonly string _solutionPath;
     private readonly List<SyntaxTree> _syntaxTrees = new();
+    // Добавляем публичный доступ к синтаксическим деревьям
+    public IReadOnlyList<SyntaxTree> SyntaxTrees => _syntaxTrees;
     private bool _disposed;
 
     public SourceCodeQueryProvider(string solutionPath)
@@ -1007,3 +1048,55 @@ public class QueryVisitor : ExpressionVisitor
         return node.GetType();
     }
 }
+
+public class MethodCallWalker : CSharpSyntaxWalker
+{
+    private readonly List<InvocationInfo> _invocations = new();
+    private string _currentContext = "<глобально>";
+
+    public IEnumerable<InvocationInfo> GetInvocations() => _invocations;
+
+    public override void VisitMethodDeclaration(MethodDeclarationSyntax node)
+    {
+        var parentContext = _currentContext;
+        _currentContext = $"метод {node.Identifier}";
+        base.VisitMethodDeclaration(node);
+        _currentContext = parentContext;
+    }
+
+    public override void VisitConstructorDeclaration(ConstructorDeclarationSyntax node)
+    {
+        var parentContext = _currentContext;
+        _currentContext = $"конструктор {node.Identifier}";
+        base.VisitConstructorDeclaration(node);
+        _currentContext = parentContext;
+    }
+
+    public override void VisitPropertyDeclaration(PropertyDeclarationSyntax node)
+    {
+        var parentContext = _currentContext;
+        _currentContext = $"свойство {node.Identifier}";
+        base.VisitPropertyDeclaration(node);
+        _currentContext = parentContext;
+    }
+
+    public override void VisitInvocationExpression(InvocationExpressionSyntax node)
+    {
+        var methodName = node.Expression.ToString();
+        var arguments = string.Join(", ", node.ArgumentList.Arguments.Select(a => a.ToString()));
+        var location = node.GetLocation().GetMappedLineSpan().StartLinePosition;
+
+        var _InvocationInfo = new InvocationInfo(methodName, arguments, _currentContext, $"{location.Line + 1}:{location.Character + 1}");
+
+        _invocations.Add(_InvocationInfo);
+
+        base.VisitInvocationExpression(node);
+    }
+}
+
+public record InvocationInfo(
+    string MethodName,
+    string Arguments,
+    string Context,
+    string Location
+);
