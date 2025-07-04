@@ -67,7 +67,7 @@ public class CodeBuddy
         Console.WriteLine("🧠 Построение базы знаний...");
         //_vectorStore = new VectorStore(_ollama, _embeddingModel);
         // Инициализация
-        using var _vectorStore = new VectorStore(_ollama, _embeddingModel, "code_vectors.db");
+        using var _vectorStore = new VectorStore(_ollama, _embeddingModel, $"{path.GetHashCode()}.vectors.db");
 
         // Построение хранилища
         await _vectorStore.BuildStoreAsync(codeFragments);
